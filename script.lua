@@ -1,10 +1,11 @@
-local detector = peripheral.find("playerDetector")
-local TARGET_NAME = "EdenFujikaze"
+local detector = peripheral.find("player_detector")
+local TARGET_NAME = "Eden_Fujikaze"
 local RANGE = 50
 local MIN_RANGE = 6 
 local TURN_DEADZONE = 5 
 local MOVE_EPS = 0.3
-
+local left = "bottom"
+local right = "top"
 if not detector then error("no detector") end
 
 local lastX, lastZ, heading = nil, nil, 0 -- heading in degrees, atan2(dz,dx)
@@ -32,8 +33,8 @@ while true do
     local ok, playerPos = pcall(function() return detector.getPlayerPos(TARGET_NAME) end)
     if not ok or not playerPos then
       print("Could not get player position:", playerPos)
-      redstone.setAnalogOutput("left", 0)
-      redstone.setAnalogOutput("right", 0)
+      redstone.setAnalogOutput(left, 0)
+      redstone.setAnalogOutput(right, 0)
       redstone.setOutput("front", false)
     else
       local dx = playerPos.x - myX
@@ -44,8 +45,8 @@ while true do
       if distance > RANGE or distance < MIN_RANGE then
         -- too far or too close: coast, no drive
         redstone.setOutput("front", false)
-        redstone.setAnalogOutput("left", 0)
-        redstone.setAnalogOutput("right", 0)
+        redstone.setAnalogOutput(left, 0)
+        redstone.setAnalogOutput(right, 0)
       else
         redstone.setOutput("front", true)
 
@@ -53,17 +54,17 @@ while true do
         local angleDiff = normAngle(targetAngle - heading) -- negative = turn left, positive = turn right
 
         if math.abs(angleDiff) < TURN_DEADZONE then
-          redstone.setAnalogOutput("left", 0)
-          redstone.setAnalogOutput("right", 0)
+          redstone.setAnalogOutput(left, 0)
+          redstone.setAnalogOutput(right, 0)
         else
           -- proportional steering: scale angle error (capped at 90°) to 1-15
           local strength = math.min(15, math.max(1, math.floor((math.abs(angleDiff) / 90) * 15)))
           if angleDiff > 0 then
-            redstone.setAnalogOutput("right", strength)
-            redstone.setAnalogOutput("left", 0)
+            redstone.setAnalogOutput(right, strength)
+            redstone.setAnalogOutput(left, 0)
           else
-            redstone.setAnalogOutput("left", strength)
-            redstone.setAnalogOutput("right", 0)
+            redstone.setAnalogOutput(left, strength)
+            redstone.setAnalogOutput(right, 0)
           end
         end
       end
