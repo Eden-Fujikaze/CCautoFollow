@@ -1,7 +1,9 @@
 local detector = peripheral.find("player_detector")
 local TARGET_NAME = "Eden_Fujikaze"
+
 local RANGE = 50
-local MIN_RANGE = 6
+local MIN_RANGE = 6          -- brake once closer than this
+local MIN_RANGE_RELEASE = 8  -- must move back out past this before driving resumes
 local TURN_DEADZONE = 5
 local MOVE_EPS = 0.3
 
@@ -10,15 +12,19 @@ local right = "top"
 local brake = "left"
 local reverse = "right"
 
--- forward/reverse mode hysteresis: switch to reverse once target is behind
--- REVERSE_ENTER, switch back to forward once target is ahead of FORWARD_ENTER
-local REVERSE_ENTER = 100  -- |angleDiff| beyond this -> go to reverse mode
-local FORWARD_ENTER = 80   -- |angleDiff| below this -> go to forward mode
+-- forward/reverse mode hysteresis + cooldown
+local REVERSE_ENTER = 100        -- |fwdDiff| beyond this -> switch to reverse mode
+local FORWARD_ENTER = 80         -- |fwdDiff| below this -> switch to forward mode
+local MODE_SWITCH_COOLDOWN = 2.0 -- min seconds between gear flips, prevents chatter
+local TICK = 0.25
 
 if not detector then error("no detector") end
 
-local lastX, lastZ, heading = nil, nil, 0 -- heading in degrees, atan2(dz,dx)
-local drivingReverse = false
+local lastX, lastZ = nil, nil
+local heading = 0            -- true facing, degrees, estimated from GPS deltas
+local drivingReverse = false -- current commanded gear
+local timeSinceSwitch = 999
+local tooClose = false
 
 local function normAngle(a)
   a = a % 360
@@ -60,17 +66,18 @@ while true do
   if not myX then
     print("GPS fix failed, skipping this cycle")
   else
+    -- 1. Update heading estimate from GPS motion.
+    -- Correct for the reverse offset using LAST tick's commanded gear (not this
+    -- tick's), which is what makes this safe to compute unconditionally: heading
+    -- never depends on any value derived from itself within the same tick.
     if lastX then
       local mdx, mdz = myX - lastX, myZ - lastZ
       if math.sqrt(mdx * mdx + mdz * mdz) > MOVE_EPS then
-        -- only trust raw GPS-delta heading while driving forward;
-        -- reversing moves us opposite our facing and would corrupt it
-        if not drivingReverse then
-          heading = math.deg(math.atan2(mdz, mdx))
+        local raw = math.deg(math.atan2(mdz, mdx))
+        if drivingReverse then
+          heading = normAngle(raw + 180)
         else
-          -- moving backward while in reverse mode means we're facing
-          -- the opposite direction of travel
-          heading = math.deg(math.atan2(-mdz, -mdx))
+          heading = normAngle(raw)
         end
       end
     end
@@ -86,35 +93,47 @@ while true do
       local dz = playerPos.z - myZ
       local distance = math.sqrt(dx * dx + dz * dz)
 
-      if distance > RANGE or distance < MIN_RANGE then
+      -- 2. too-close hysteresis: avoids bang-bang braking right at MIN_RANGE
+      if tooClose then
+        if distance > MIN_RANGE_RELEASE then
+          tooClose = false
+        end
+      else
+        if distance < MIN_RANGE then
+          tooClose = true
+        end
+      end
+
+      if distance > RANGE or tooClose then
         stopAndBrake()
       else
         setBrake(false)
 
         local targetAngle = math.deg(math.atan2(dz, dx))
-        -- raw bearing error relative to current forward heading
         local fwdDiff = normAngle(targetAngle - heading)
 
-        -- hysteresis: decide whether we should be driving forward or reverse
-        if drivingReverse then
-          if math.abs(fwdDiff) < FORWARD_ENTER then
-            drivingReverse = false
-          end
-        else
-          if math.abs(fwdDiff) > REVERSE_ENTER then
-            drivingReverse = true
+        -- 3. forward/reverse mode hysteresis, gated by cooldown to prevent chatter
+        timeSinceSwitch = timeSinceSwitch + TICK
+        if timeSinceSwitch >= MODE_SWITCH_COOLDOWN then
+          if drivingReverse then
+            if math.abs(fwdDiff) < FORWARD_ENTER then
+              drivingReverse = false
+              timeSinceSwitch = 0
+            end
+          else
+            if math.abs(fwdDiff) > REVERSE_ENTER then
+              drivingReverse = true
+              timeSinceSwitch = 0
+            end
           end
         end
 
         setReverse(drivingReverse)
 
-        -- effective bearing error to steer against depends on drive direction:
-        -- forward: steer toward targetAngle directly
-        -- reverse: the vehicle's effective "front" is heading+180, so steer
-        -- against the angle relative to that
+        -- 4. steer relative to effective facing (heading, or heading+180 in reverse)
         local angleDiff
         if drivingReverse then
-          angleDiff = normAngle(targetAngle - (heading + 180))
+          angleDiff = normAngle(targetAngle - normAngle(heading + 180))
         else
           angleDiff = fwdDiff
         end
@@ -127,8 +146,7 @@ while true do
         if math.abs(angleDiff) < TURN_DEADZONE then
           setSteer(0, 0)
         else
-          -- steep curve: even moderate errors get strong correction,
-          -- full lock (15) reached well before 90 degrees off
+          -- full lock reached by 45 degrees off, floor of 6 so small errors still correct
           local norm = math.min(1, math.abs(angleDiff) / 45)
           local strength = math.min(15, math.max(6, math.floor(norm * 15)))
           setSteer(strength, angleDiff > 0 and 1 or -1)
@@ -137,5 +155,5 @@ while true do
     end
   end
 
-  sleep(0.25)
+  sleep(TICK)
 end
