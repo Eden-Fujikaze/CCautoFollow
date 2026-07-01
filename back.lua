@@ -3,7 +3,7 @@ if not modem then error("no modem found") end
 
 rednet.open(peripheral.getName(modem))
 
-local CHANNEL_ID = 100 -- pick any id, front must match
+local CHANNEL_ID = 100
 local TICK = 0.25
 
 while true do
