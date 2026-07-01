@@ -10,20 +10,15 @@ local right = "top"
 local brake = "left"
 local reverse = "right"
 
--- pivot-turn tuning
-local SHARP_TURN_THRESHOLD = 45   -- |angleDiff| above this triggers pivot-in-place turning
-local PIVOT_BURST_TIME = 0.5      -- seconds spent in each forward/reverse burst while pivoting
-local PIVOT_STEER_STRENGTH = 15   -- steering strength during pivot bursts
+-- forward/reverse mode hysteresis: switch to reverse once target is behind
+-- REVERSE_ENTER, switch back to forward once target is ahead of FORWARD_ENTER
+local REVERSE_ENTER = 100  -- |angleDiff| beyond this -> go to reverse mode
+local FORWARD_ENTER = 80   -- |angleDiff| below this -> go to forward mode
 
 if not detector then error("no detector") end
 
 local lastX, lastZ, heading = nil, nil, 0 -- heading in degrees, atan2(dz,dx)
-
--- pivot state machine
-local pivoting = false
-local pivotPhase = "forward" -- "forward" or "reverse"
-local pivotTimer = 0
-local pivotDir = 1 -- 1 = turn right (angleDiff > 0), -1 = turn left
+local drivingReverse = false
 
 local function normAngle(a)
   a = a % 360
@@ -56,13 +51,10 @@ end
 local function stopAndBrake()
   redstone.setOutput("front", false)
   setSteer(0, 0)
-  setReverse(false)
   setBrake(true)
-  pivoting = false
 end
 
 while true do
-  local dt = 0.25
   local myX, myY, myZ = gps.locate()
 
   if not myX then
@@ -85,63 +77,48 @@ while true do
       local dx = playerPos.x - myX
       local dz = playerPos.z - myZ
       local distance = math.sqrt(dx * dx + dz * dz)
-      print(string.format("dist=%.1f heading=%.1f pivoting=%s", distance, heading, tostring(pivoting)))
 
       if distance > RANGE or distance < MIN_RANGE then
-        -- too far or too close: brake, no drive
         stopAndBrake()
       else
+        setBrake(false)
+
         local targetAngle = math.deg(math.atan2(dz, dx))
-        local angleDiff = normAngle(targetAngle - heading) -- negative = turn left, positive = turn right
+        -- raw bearing error relative to current forward heading
+        local fwdDiff = normAngle(targetAngle - heading)
+
+        -- hysteresis: decide whether we should be driving forward or reverse
+        if drivingReverse then
+          if math.abs(fwdDiff) < FORWARD_ENTER then
+            drivingReverse = false
+          end
+        else
+          if math.abs(fwdDiff) > REVERSE_ENTER then
+            drivingReverse = true
+          end
+        end
+
+        setReverse(drivingReverse)
+
+        -- effective bearing error to steer against depends on drive direction:
+        -- forward: steer toward targetAngle directly
+        -- reverse: the vehicle's effective "front" is heading+180, so steer
+        -- against the angle relative to that
+        local angleDiff
+        if drivingReverse then
+          angleDiff = normAngle(targetAngle - (heading + 180))
+        else
+          angleDiff = fwdDiff
+        end
+
+        print(string.format("dist=%.1f heading=%.1f rev=%s diff=%.1f",
+          distance, heading, tostring(drivingReverse), angleDiff))
+
+        redstone.setOutput("front", true)
 
         if math.abs(angleDiff) < TURN_DEADZONE then
-          -- driving straight, close enough
-          pivoting = false
-          setBrake(false)
-          setReverse(false)
-          redstone.setOutput("front", true)
           setSteer(0, 0)
-
-        elseif math.abs(angleDiff) >= SHARP_TURN_THRESHOLD then
-          -- sharp angle: pivot in place via alternating forward/reverse bursts
-          setBrake(false)
-
-          if not pivoting then
-            pivoting = true
-            pivotPhase = "forward"
-            pivotTimer = 0
-            pivotDir = angleDiff > 0 and 1 or -1
-          end
-
-          -- re-evaluate turn direction each cycle in case target moved,
-          -- but keep the burst phase/timer running
-          pivotDir = angleDiff > 0 and 1 or -1
-
-          pivotTimer = pivotTimer + dt
-          if pivotTimer >= PIVOT_BURST_TIME then
-            pivotTimer = 0
-            pivotPhase = (pivotPhase == "forward") and "reverse" or "forward"
-          end
-
-          if pivotPhase == "forward" then
-            setReverse(false)
-            redstone.setOutput("front", true)
-            setSteer(PIVOT_STEER_STRENGTH, pivotDir)
-          else
-            setReverse(true)
-            redstone.setOutput("front", true)
-            -- same physical steer direction: with drivetrain reversed,
-            -- this walks the vehicle back on the opposite track, completing the pivot
-            setSteer(PIVOT_STEER_STRENGTH, pivotDir)
-          end
-
         else
-          -- moderate angle: normal proportional steering, driving forward
-          pivoting = false
-          setBrake(false)
-          setReverse(false)
-          redstone.setOutput("front", true)
-
           local strength = math.min(15, math.max(1, math.floor((math.abs(angleDiff) / 90) * 15)))
           setSteer(strength, angleDiff > 0 and 1 or -1)
         end
