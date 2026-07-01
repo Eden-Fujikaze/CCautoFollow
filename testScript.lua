@@ -63,7 +63,15 @@ while true do
     if lastX then
       local mdx, mdz = myX - lastX, myZ - lastZ
       if math.sqrt(mdx * mdx + mdz * mdz) > MOVE_EPS then
-        heading = math.deg(math.atan2(mdz, mdx))
+        -- only trust raw GPS-delta heading while driving forward;
+        -- reversing moves us opposite our facing and would corrupt it
+        if not drivingReverse then
+          heading = math.deg(math.atan2(mdz, mdx))
+        else
+          -- moving backward while in reverse mode means we're facing
+          -- the opposite direction of travel
+          heading = math.deg(math.atan2(-mdz, -mdx))
+        end
       end
     end
     lastX, lastZ = myX, myZ
@@ -119,7 +127,10 @@ while true do
         if math.abs(angleDiff) < TURN_DEADZONE then
           setSteer(0, 0)
         else
-          local strength = math.min(15, math.max(1, math.floor((math.abs(angleDiff) / 90) * 15)))
+          -- steep curve: even moderate errors get strong correction,
+          -- full lock (15) reached well before 90 degrees off
+          local norm = math.min(1, math.abs(angleDiff) / 45)
+          local strength = math.min(15, math.max(6, math.floor(norm * 15)))
           setSteer(strength, angleDiff > 0 and 1 or -1)
         end
       end
