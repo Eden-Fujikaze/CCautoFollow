@@ -36,14 +36,22 @@ local function clearAll()
 end
 
 local function setState(newState)
-  if newState == state then return end
+  if newState == state then
+    -- re-assert every tick even on no-op, cheap insurance against a link
+    -- losing/rebooting mid-run and forgetting its last commanded value
+    if state == "turnLeft" then redstone.setOutput(FACE_LEFT_BOTH, true)
+    elseif state == "turnRight" then redstone.setOutput(FACE_RIGHT_BOTH, true)
+    elseif state == "front" then redstone.setOutput(FACE_FRONT, true)
+    else clearAll()
+    end
+    return
+  end
   state = newState
   clearAll()
   if state == "turnLeft" then redstone.setOutput(FACE_LEFT_BOTH, true)
   elseif state == "turnRight" then redstone.setOutput(FACE_RIGHT_BOTH, true)
   elseif state == "front" then redstone.setOutput(FACE_FRONT, true)
   end
-  -- "stop" leaves everything cleared, no explicit brake output
 end
 
 local function pollRearPos()
@@ -51,13 +59,17 @@ local function pollRearPos()
   if msg then rearPos = msg end
 end
 
+-- clear everything on startup, don't trust whatever state links were left in
+clearAll()
+
 while true do
   pollRearPos()
 
   local myX, myY, myZ = gps.locate()
 
   if not myX then
-    print("GPS fix failed, skipping this cycle")
+    print("GPS fix failed, stopping")
+    setState("stop")
   elseif not rearPos then
     print("No rear position yet, stopping")
     setState("stop")
@@ -93,6 +105,8 @@ while true do
         if state == "front" then
           if math.abs(diff) > ENTER_TURN then
             setState(diff > 0 and "turnRight" or "turnLeft")
+          else
+            setState("front")
           end
         else
           if math.abs(diff) < EXIT_TURN then
