@@ -37,8 +37,6 @@ end
 
 local function setState(newState)
   if newState == state then
-    -- re-assert every tick even on no-op, cheap insurance against a link
-    -- losing/rebooting mid-run and forgetting its last commanded value
     if state == "turnLeft" then redstone.setOutput(FACE_LEFT_BOTH, true)
     elseif state == "turnRight" then redstone.setOutput(FACE_RIGHT_BOTH, true)
     elseif state == "front" then redstone.setOutput(FACE_FRONT, true)
@@ -59,7 +57,6 @@ local function pollRearPos()
   if msg then rearPos = msg end
 end
 
--- clear everything on startup, don't trust whatever state links were left in
 clearAll()
 
 while true do
