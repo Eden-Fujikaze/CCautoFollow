@@ -12,8 +12,6 @@ local MIN_RANGE = 6
 local MIN_RANGE_RELEASE = 8
 local TICK = 0.25
 
-local FACE_BRAKE      = "left"
-local FACE_REVERSE    = "right"
 local FACE_LEFT_BOTH  = "top"
 local FACE_RIGHT_BOTH = "bottom"
 local FACE_FRONT      = "front"
@@ -22,8 +20,8 @@ local ENTER_TURN = 15
 local EXIT_TURN  = 5
 
 local tooClose = false
-local state = "brake"
-local rearPos = nil -- last known rear computer position
+local state = "stop" -- "stop" | "turnLeft" | "turnRight" | "front"
+local rearPos = nil
 
 local function normAngle(a)
   a = a % 360
@@ -32,7 +30,6 @@ local function normAngle(a)
 end
 
 local function clearAll()
-  redstone.setOutput(FACE_BRAKE, false)
   redstone.setOutput(FACE_LEFT_BOTH, false)
   redstone.setOutput(FACE_RIGHT_BOTH, false)
   redstone.setOutput(FACE_FRONT, false)
@@ -42,15 +39,13 @@ local function setState(newState)
   if newState == state then return end
   state = newState
   clearAll()
-  if state == "brake" then redstone.setOutput(FACE_BRAKE, true)
-  elseif state == "turnLeft" then redstone.setOutput(FACE_LEFT_BOTH, true)
+  if state == "turnLeft" then redstone.setOutput(FACE_LEFT_BOTH, true)
   elseif state == "turnRight" then redstone.setOutput(FACE_RIGHT_BOTH, true)
   elseif state == "front" then redstone.setOutput(FACE_FRONT, true)
   end
+  -- "stop" leaves everything cleared, no explicit brake output
 end
 
--- non-blocking listener: grab the latest rear position if one arrived,
--- otherwise fall through immediately so the main loop still ticks on schedule
 local function pollRearPos()
   local id, msg, protocol = rednet.receive("car_rear_pos", 0)
   if msg then rearPos = msg end
@@ -64,8 +59,8 @@ while true do
   if not myX then
     print("GPS fix failed, skipping this cycle")
   elseif not rearPos then
-    print("No rear position yet, braking")
-    setState("brake")
+    print("No rear position yet, stopping")
+    setState("stop")
   else
     local hx, hz = myX - rearPos.x, myZ - rearPos.z
     local heading = normAngle(math.deg(math.atan2(hz, hx)))
@@ -74,7 +69,7 @@ while true do
 
     if not ok or not playerPos then
       print("Could not get player position:", playerPos)
-      setState("brake")
+      setState("stop")
     else
       local dx = playerPos.x - myX
       local dz = playerPos.z - myZ
@@ -87,7 +82,7 @@ while true do
       end
 
       if distance > RANGE or tooClose then
-        setState("brake")
+        setState("stop")
       else
         local targetAngle = math.deg(math.atan2(dz, dx))
         local diff = normAngle(targetAngle - heading)
